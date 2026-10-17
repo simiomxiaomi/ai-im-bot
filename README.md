@@ -1,5 +1,7 @@
 # AI-IM-Bot
 
+<img src="icon.png" width="120" alt="AI-IM-Bot" align="right" />
+
 > 让 QQ 替你回消息：接入大模型，自动回复私聊与群聊，带上下文记忆、定时问候和群助手。
 > Windows 桌面 GUI + 单文件 exe，NapCat 一键安装，扫码登录。
 
@@ -66,12 +68,18 @@
 
 ## 快速开始
 
-### 方式一：下载 exe（推荐给不想装 Python 的人）
+### 方式一：安装程序（推荐）
 
-1. 到仓库的 **Releases** 页面下载 `ai-im-bot.exe`
-2. 双击运行，按向导填写 API Key
-3. 点「一键下载安装」装 NapCat，再点「启动 NapCat」扫码登录小号
-4. 回到窗口点「启动机器人」
+1. 到仓库的 **Releases** 页面下载 `ai-im-bot-setup.exe`
+2. 双击安装：默认装到 `C:\Ai-im-bot`，也可以改路径
+3. 安装完成会在桌面生成 `Aibot` 快捷方式，从它启动
+4. 填写 API Key / 模型，点「保存配置」
+5. 点 **「快速安装」**：自动下载安装器 → 测速选择最快源下载 `NapCat.Shell.zip` → 运行安装器
+6. 安装完成点「启动 NapCat」，手机 QQ 扫码登录小号
+7. 点「自动配置」写入 3001 端口 WebSocket 配置
+8. 点「启动机器人」，日志出现 `已连接 OneBot` 即成功
+
+> 静默安装：`ai-im-bot-setup.exe --silent --dir D:\Ai-im-bot`
 
 ### 方式二：源码运行
 

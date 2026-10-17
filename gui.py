@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ctypes
 import logging
 import os
 import queue
@@ -36,8 +37,10 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from aibot.app import Application  # noqa: E402
+from aibot import __version__ as APP_VERSION  # noqa: E402
 from aibot.config import Config, load_dotenv  # noqa: E402
 import installer  # noqa: E402
+import napcat_config  # noqa: E402
 import napcat_webui  # noqa: E402
 
 CONFIG_PATH = APP_DIR / "config.yaml"
@@ -49,6 +52,17 @@ FG = "#cfe6df"
 MUTED = "#6f8b85"
 ACCENT = "#35e0b0"
 LINE = "#1d2d31"
+
+# 常用 OpenAI 兼容服务预设：名称 -> (Base URL, 模型)
+PRESETS = {
+    "智谱 GLM": ("https://open.bigmodel.cn/api/paas/v4", "glm-5.3"),
+    "DeepSeek": ("https://api.deepseek.com/v1", "deepseek-chat"),
+    "OpenAI": ("https://api.openai.com/v1", "gpt-4o-mini"),
+    "通义千问": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+    "Kimi": ("https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+    "硅基流动": ("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3"),
+    "Ollama 本地": ("http://127.0.0.1:11434/v1", "qwen2.5"),
+}
 
 
 class QueueHandler(logging.Handler):
@@ -69,10 +83,12 @@ class QueueHandler(logging.Handler):
 class BotGUI(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("AI-IM-Bot · QQ 助手配置向导")
-        self.geometry("980x700")
-        self.minsize(900, 640)
+        self.title(f"AI-IM-Bot · QQ 助手配置向导 v{APP_VERSION}")
+        self._scale = self._detect_scale()
+        self.geometry(self._window_size(980, 700))
+        self.minsize(int(900 * self._scale), int(640 * self._scale))
         self.configure(bg=BG)
+        self._set_icon()
 
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.bot_app: Application | None = None
@@ -89,6 +105,29 @@ class BotGUI(tk.Tk):
 
     # ------------------------------------------------------------------ 界面
 
+    def _detect_scale(self) -> float:
+        """按系统 DPI 计算缩放比例，并把 Tk 的字体缩放同步过去。"""
+        try:
+            dpi = self.winfo_fpixels("1i")
+            self.tk.call("tk", "scaling", dpi / 72.0)
+            return max(1.0, dpi / 96.0)
+        except Exception:  # noqa: BLE001
+            return 1.0
+
+    def _window_size(self, width: int, height: int) -> str:
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        w = min(int(width * self._scale), int(screen_w * 0.92))
+        h = min(int(height * self._scale), int(screen_h * 0.9))
+        return f"{w}x{h}"
+
+    def _set_icon(self) -> None:
+        try:
+            base = Path(getattr(sys, "_MEIPASS", APP_DIR))
+            self.iconphoto(True, tk.PhotoImage(file=str(base / "icon.png")))
+        except Exception:  # noqa: BLE001 - 图标失败不影响使用
+            pass
+
     def _build_style(self) -> None:
         style = ttk.Style(self)
         style.theme_use("clam")
@@ -97,16 +136,20 @@ class BotGUI(tk.Tk):
         style.configure("Panel.TFrame", background=PANEL)
         style.configure("TLabel", background=BG, foreground=FG)
         style.configure("Muted.TLabel", background=BG, foreground=MUTED)
+        style.configure("PanelMuted.TLabel", background=PANEL, foreground=MUTED)
+        style.configure("PanelTitle.TLabel", background=PANEL, foreground=ACCENT,
+                        font=("Microsoft YaHei UI", 11, "bold"))
         style.configure("Title.TLabel", background=BG, foreground=ACCENT,
                         font=("Microsoft YaHei UI", 16, "bold"))
         style.configure("TButton", background="#132024", foreground=FG, borderwidth=0, padding=6)
         style.map("TButton", background=[("active", "#1b3036")])
         style.configure("Accent.TButton", background="#17453a", foreground=ACCENT)
         style.map("Accent.TButton", background=[("active", "#1f5a4a")])
+        style.configure("Danger.TButton", background="#45201f", foreground="#ff8a80")
+        style.map("Danger.TButton", background=[("active", "#5a2a28")])
         style.configure("TEntry", fieldbackground="#0a1114", foreground=FG,
                         insertcolor=FG, borderwidth=1)
         style.configure("TCombobox", fieldbackground="#0a1114", foreground=FG)
-        style.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor="#0a1114")
 
     def _build_ui(self) -> None:
         header = ttk.Frame(self)
@@ -136,15 +179,35 @@ class BotGUI(tk.Tk):
         ttk.Button(footer, text="打开 Web 控制台", command=self._open_web).pack(side="right")
 
     def _build_form(self, parent: ttk.Frame) -> None:
-        left = ttk.Frame(parent, style="Panel.TFrame", padding=14)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        container = ttk.Frame(parent)
+        container.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(container, bg=PANEL, highlightthickness=0, bd=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        left = ttk.Frame(canvas, style="Panel.TFrame", padding=14)
+        window = canvas.create_window((0, 0), window=left, anchor="nw")
+        left.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+
+        def _on_wheel(event) -> None:
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        canvas.bind("<Enter>", lambda _event: canvas.bind_all("<MouseWheel>", _on_wheel))
+        canvas.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
+
         left.columnconfigure(1, weight=1)
 
         row = 0
 
         def label(text: str) -> None:
             nonlocal row
-            ttk.Label(left, text=text, style="Muted.TLabel").grid(
+            ttk.Label(left, text=text, style="PanelMuted.TLabel").grid(
                 row=row, column=0, sticky="w", pady=(8, 2))
 
         def entry(value: str = "", show: str = "") -> ttk.Entry:
@@ -157,6 +220,12 @@ class BotGUI(tk.Tk):
 
         tk.Label(left, text="大模型", bg=PANEL, fg=ACCENT,
                   font=("Microsoft YaHei UI", 11, "bold")).grid(row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        label("预设模型")
+        self.preset_box = ttk.Combobox(left, state="readonly", values=list(PRESETS))
+        self.preset_box.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=(8, 2))
+        self.preset_box.bind("<<ComboboxSelected>>", self._apply_preset)
         row += 1
 
         label("Base URL")
@@ -188,22 +257,28 @@ class BotGUI(tk.Tk):
         napcat_btns = ttk.Frame(left, style="Panel.TFrame")
         napcat_btns.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(2, 0))
         row += 1
-        ttk.Button(napcat_btns, text="检测", command=self._check_napcat).pack(side="left")
-        ttk.Button(napcat_btns, text="一键下载安装", command=self._download_napcat).pack(side="left", padx=6)
+        ttk.Button(napcat_btns, text="快速安装", style="Accent.TButton",
+                   command=self._quick_install).pack(side="left")
+        ttk.Button(napcat_btns, text="启动 NapCat", command=self._launch_napcat).pack(side="left", padx=6)
+        ttk.Button(napcat_btns, text="扫码登录", command=self._scan_qr).pack(side="left")
 
         napcat_btns2 = ttk.Frame(left, style="Panel.TFrame")
         napcat_btns2.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         row += 1
-        ttk.Button(napcat_btns2, text="启动 NapCat", command=self._launch_napcat).pack(side="left")
-        ttk.Button(napcat_btns2, text="扫码登录", style="Accent.TButton",
-                   command=self._scan_qr).pack(side="left", padx=6)
+        ttk.Button(napcat_btns2, text="一键下载", command=self._download_napcat).pack(side="left")
+        ttk.Button(napcat_btns2, text="修复下载", command=self._repair_download).pack(side="left", padx=6)
+        ttk.Button(napcat_btns2, text="测速下载", command=self._speedtest_download).pack(side="left")
+        ttk.Button(napcat_btns2, text="安装", command=self._install_napcat).pack(side="left", padx=6)
 
-        self.progress = ttk.Progressbar(left, mode="determinate")
-        self.progress.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        napcat_btns3 = ttk.Frame(left, style="Panel.TFrame")
+        napcat_btns3.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         row += 1
+        ttk.Button(napcat_btns3, text="自动配置", command=self._auto_config).pack(side="left")
+        ttk.Button(napcat_btns3, text="重启 NapCat", command=self._restart_napcat).pack(side="left", padx=6)
+        ttk.Button(napcat_btns3, text="卸载", command=self._uninstall_napcat).pack(side="left")
 
-        tk.Label(left, text="首次使用：先点「一键下载安装」，启动 NapCat 扫码登录小号，\n"
-                             "再在 NapCat WebUI（127.0.0.1:6099）加 WebSocket 服务器，端口 3001。",
+        tk.Label(left, text="首次使用：测速下载 → 安装 NapCat → 启动 → 扫码 → 自动配置\n"
+                             "下载进度会显示在右侧「运行日志」里。",
                   bg=PANEL, fg=MUTED, justify="left").grid(
             row=row, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
@@ -218,14 +293,27 @@ class BotGUI(tk.Tk):
         tk.Label(head, text="运行日志", bg=PANEL, fg=FG).pack(side="left")
         ttk.Button(head, text="清空", command=lambda: self.log_text.delete("1.0", "end")).pack(side="right")
 
-        self.log_text = tk.Text(right, bg="#0a1114", fg=MUTED, insertbackground=FG,
-                                relief="flat", wrap="word", font=("Consolas", 9))
+        self.log_text = tk.Text(right, bg="#0a1114", fg="#9fb3ad", insertbackground=FG,
+                                relief="flat", wrap="word", font=("Consolas", 10))
         self.log_text.grid(row=1, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(right, orient="vertical", command=self.log_text.yview)
         scroll.grid(row=1, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scroll.set)
+        self.log_text.tag_configure("INFO", foreground="#9fb3ad")
+        self.log_text.tag_configure("WARNING", foreground="#ffc857")
+        self.log_text.tag_configure("ERROR", foreground="#ff6b6b")
 
     # ------------------------------------------------------------------ 配置
+
+    def _apply_preset(self, event=None) -> None:
+        name = self.preset_box.get()
+        base, model = PRESETS.get(name, ("", ""))
+        if base:
+            self.var_base_url.set(base)
+        if model:
+            self.var_model.set(model)
+        if name:
+            self._log("已套用预设：{}（{} / {}）".format(name, base, model))
 
     def _load_settings(self) -> None:
         if ENV_PATH.exists():
@@ -249,6 +337,10 @@ class BotGUI(tk.Tk):
         self.var_token.set(platform.get("access_token", self.var_token.get()) or "aibot-token")
         policy = data.get("policy") or {}
         self.var_whitelist.set(", ".join(policy.get("allow_users") or []))
+        for name, (base, _model) in PRESETS.items():
+            if self.var_base_url.get() == base:
+                self.preset_box.set(name)
+                break
         self._check_napcat()
 
     def _collect_config(self) -> dict:
@@ -386,11 +478,7 @@ class BotGUI(tk.Tk):
 
         def worker() -> None:
             try:
-                def progress(done: int, total: int) -> None:
-                    if total:
-                        self.after(0, lambda: self.progress.configure(maximum=total, value=done))
-
-                launcher = installer.download_napcat(progress=progress)
+                launcher = installer.download_napcat(progress=self._progress_logger("OneKey 包"))
                 self.after(0, lambda: self._log("NapCat 安装完成：{}".format(launcher)))
                 self.after(0, lambda: messagebox.showinfo(
                     "安装完成",
@@ -404,12 +492,214 @@ class BotGUI(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
         self._log("开始下载 NapCat…（约 100MB，取决于网速）")
 
+    def _progress_logger(self, prefix: str = "下载中"):
+        """把下载进度按 1% 打到运行日志（替代进度条）。"""
+        state = {"pct": -1}
+
+        def log(done: int, total: int) -> None:
+            if not total:
+                return
+            pct = int(done * 100 / total)
+            if pct > state["pct"]:
+                state["pct"] = pct
+                self.after(0, lambda p=pct, d=done, t=total: self._log(
+                    "{} {}%（{:.1f}/{:.1f} MB）".format(
+                        prefix, p, d / 1024 / 1024, t / 1024 / 1024
+                    )
+                ))
+
+        return log
+
+    def _repair_download(self) -> None:
+        """重新下载完整的 NapCat.Shell.zip（安装器自带下载经常被截断）。"""
+        def worker() -> None:
+            try:
+                self.after(0, lambda: self._log("正在下载完整的 NapCat.Shell.zip（约 34MB）…"))
+                path = installer.download_shell_zip(progress=self._progress_logger("NapCat.Shell"))
+                self.after(0, lambda: self._log("NapCat.Shell.zip 已修复：{}".format(path)))
+                self.after(0, lambda: messagebox.showinfo(
+                    "修复完成",
+                    "NapCat.Shell.zip 已替换为完整包。\n现在点「安装 NapCat」。",
+                ))
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: messagebox.showerror("修复失败", str(exc)))
+
+        self._log("开始修复 NapCat.Shell.zip…")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _speedtest_download(self) -> None:
+        """测速所有下载源，选最快的下载 NapCat.Shell.zip。"""
+        def worker() -> None:
+            try:
+                self.after(0, lambda: self._log("正在测速下载源（每个源拉 512KB）…"))
+                sources = installer.release_sources()
+                results = installer.measure_sources(sources)
+                for name, _url, speed in results:
+                    self.after(0, lambda n=name, s=speed: self._log(
+                        "{}: {:.2f} MB/s".format(n, s) if s > 0 else "{}: 不可用".format(n)
+                    ))
+                best = max(results, key=lambda item: item[2])
+                if best[2] <= 0:
+                    raise RuntimeError("所有下载源都不可用")
+                self.after(0, lambda n=best[0]: self._log("选择「{}」下载…".format(n)))
+                path = installer.download_shell_zip(
+                    progress=self._progress_logger("NapCat.Shell"), urls=[best[1]]
+                )
+                self.after(0, lambda: self._log("下载完成：{}".format(path)))
+                self.after(0, lambda: messagebox.showinfo(
+                    "下载完成",
+                    "NapCat.Shell.zip 已就绪。\n现在点「安装 NapCat」。",
+                ))
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: messagebox.showerror("测速下载失败", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _quick_install(self) -> None:
+        """一键准备：下载 OneKey → 测速下载 Shell.zip → 运行安装器。"""
+        if not messagebox.askyesno(
+            "快速安装",
+            "将自动完成：\n"
+            "1. 下载 NapCat 安装器（如果没有）\n"
+            "2. 测速并下载完整的 NapCat.Shell.zip\n"
+            "3. 运行安装器\n\n继续？",
+        ):
+            return
+
+        def worker() -> None:
+            try:
+                if not (installer.napcat_dir() / "NapCatInstaller.exe").exists():
+                    self.after(0, lambda: self._log("下载 NapCat 安装器…"))
+                    installer.download_napcat(progress=self._progress_logger("OneKey 包"))
+
+                if not installer.shell_zip_ok():
+                    self.after(0, lambda: self._log("测速下载源…"))
+                    sources = installer.release_sources()
+                    results = installer.measure_sources(sources)
+                    for name, _url, speed in results:
+                        self.after(0, lambda n=name, s=speed: self._log(
+                            "{}: {:.2f} MB/s".format(n, s) if s > 0 else "{}: 不可用".format(n)
+                        ))
+                    best = max(results, key=lambda item: item[2])
+                    if best[2] <= 0:
+                        raise RuntimeError("所有下载源都不可用，请手动下载")
+                    self.after(0, lambda n=best[0]: self._log("选择「{}」下载…".format(n)))
+                    installer.download_shell_zip(
+                        progress=self._progress_logger("NapCat.Shell"), urls=[best[1]]
+                    )
+
+                installer.install_napcat()
+                self.after(0, lambda: self._log("安装器已启动，请按控制台提示完成安装"))
+                self.after(0, lambda: messagebox.showinfo(
+                    "快速安装",
+                    "安装器已打开。\n完成安装后点「启动 NapCat」，再扫码登录。",
+                ))
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: messagebox.showerror("快速安装失败", str(exc)))
+
+        self._log("开始快速安装…")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _install_napcat(self) -> None:
+        if not installer.shell_zip_ok():
+            if messagebox.askyesno(
+                "NapCat 包不完整",
+                "检测到 NapCat.Shell.zip 缺失或损坏（安装器自带下载经常被截断）。\n"
+                "要先修复下载吗？",
+            ):
+                self._repair_download()
+                return
+        try:
+            installer.install_napcat()
+            self._log("NapCat 安装器已打开，按控制台提示完成安装")
+            messagebox.showinfo(
+                "安装 NapCat",
+                "已打开安装器控制台。\n"
+                "等它自动检测 QQ 并完成安装后，回到本窗口点「启动 NapCat」。",
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("安装失败", str(exc))
+
     def _launch_napcat(self) -> None:
         try:
             self.napcat_proc = installer.launch_napcat()
             self._log("NapCat 已启动，请扫码登录小号；WebUI 默认 127.0.0.1:6099")
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("启动失败", str(exc))
+
+    def _auto_config(self) -> None:
+        """把 3001 端口的 WebSocket 服务器写进 NapCat 配置。"""
+        token = self.var_token.get().strip() or "aibot-token"
+
+        def worker() -> None:
+            try:
+                files = napcat_config.apply_websocket_config(3001, token)
+                if not files:
+                    created = napcat_config.create_default_config(3001, token)
+                    if created:
+                        files = [created]
+                if files:
+                    listing = "\n".join(str(path) for path in files)
+                    self.after(0, lambda: self._log("已自动配置 NapCat：\n" + listing))
+                    self.after(0, lambda: messagebox.showinfo(
+                        "自动配置完成",
+                        "已写入以下配置：\n{}\n\n重启 NapCat 后生效（关闭后重新点「启动 NapCat」）。".format(listing),
+                    ))
+                else:
+                    self.after(0, lambda: messagebox.showinfo(
+                        "没找到配置文件",
+                        "先启动 NapCat、扫码登录一次，让它在 config 目录生成 "
+                        "onebot11_<QQ号>.json，再点这个按钮。",
+                    ))
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: messagebox.showerror("自动配置失败", str(exc)))
+
+        self._log("正在写入 NapCat WebSocket 配置（127.0.0.1:3001）…")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _restart_napcat(self) -> None:
+        if not messagebox.askyesno(
+            "重启 NapCat",
+            "会先关闭 QQ 和 NapCat，再重新启动。\nQQ 里未发送的消息会丢失，确定吗？",
+        ):
+            return
+
+        def worker() -> None:
+            try:
+                self.after(0, lambda: self._log("正在重启 NapCat…"))
+                installer.restart_napcat(close_qq=True)
+                self.after(0, lambda: self._log("NapCat 已重新启动，请扫码登录"))
+                self.after(0, self._check_napcat)
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: messagebox.showerror("重启失败", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _uninstall_napcat(self) -> None:
+        if not installer.is_installed():
+            messagebox.showinfo("未安装", "没有检测到 NapCat 安装目录。")
+            return
+        if not messagebox.askyesno(
+            "卸载 NapCat",
+            "将停止 NapCat 启动器并删除安装目录：\n{}\n\n不会影响 QQ 本身，确定吗？".format(
+                installer.napcat_dir()),
+        ):
+            return
+
+        def worker() -> None:
+            try:
+                installer.uninstall_napcat()
+                self.after(0, lambda: self._log("NapCat 已卸载"))
+                self.after(0, self._check_napcat)
+                self.after(0, lambda: messagebox.showinfo("完成", "NapCat 已卸载。"))
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: messagebox.showerror(
+                    "卸载失败",
+                    "请先完全关闭 QQ 和 NapCat，再重试。\n\n{}".format(exc),
+                ))
+
+        self._log("正在卸载 NapCat…")
+        threading.Thread(target=worker, daemon=True).start()
 
     def _scan_qr(self) -> None:
         """从 NapCat WebUI 拉取 QQ 登录二维码，弹窗显示。"""
@@ -470,6 +760,8 @@ class BotGUI(tk.Tk):
             except tk.TclError:
                 pass
             self._check_napcat()
+            # 登录后配置文件名里才带 QQ 号，这时自动写 WebSocket 配置最准
+            self.after(1000, self._auto_config)
 
         def poll() -> None:
             def check() -> None:
@@ -504,7 +796,13 @@ class BotGUI(tk.Tk):
         root.addHandler(QueueHandler(self.log_queue))
 
     def _log(self, text: str) -> None:
-        self.log_text.insert("end", text + "\n")
+        if "ERROR" in text:
+            tag = "ERROR"
+        elif "WARNING" in text:
+            tag = "WARNING"
+        else:
+            tag = "INFO"
+        self.log_text.insert("end", text + "\n", tag)
         self.log_text.see("end")
 
     def _drain_logs(self) -> None:
@@ -522,7 +820,27 @@ class BotGUI(tk.Tk):
         self.destroy()
 
 
+def _enable_high_dpi() -> None:
+    """让进程声明 DPI 感知，避免 Windows 把界面位图拉伸导致发糊。"""
+    if os.name != "nt":
+        return
+    # 优先 Per-Monitor V2（Win10 1703+）
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:  # noqa: BLE001
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main() -> None:
+    _enable_high_dpi()
     app = BotGUI()
     app.mainloop()
 

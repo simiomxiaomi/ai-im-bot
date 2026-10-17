@@ -29,9 +29,17 @@ platform:
     poll_interval: 1.0          # 轮询未读的间隔（秒）
 
 llm:
-  base_url: https://api.deepseek.com/v1
+  # 常用 OpenAI 兼容预设（GUI 里可直接选）：
+  #   智谱 GLM:  https://open.bigmodel.cn/api/paas/v4              glm-5.3
+  #   DeepSeek:  https://api.deepseek.com/v1                       deepseek-chat
+  #   OpenAI:    https://api.openai.com/v1                         gpt-4o-mini
+  #   通义千问:  https://dashscope.aliyuncs.com/compatible-mode/v1 qwen-plus
+  #   Kimi:      https://api.moonshot.cn/v1                        moonshot-v1-8k
+  #   硅基流动:  https://api.siliconflow.cn/v1                     deepseek-ai/DeepSeek-V3
+  #   Ollama:    http://127.0.0.1:11434/v1                        qwen2.5
+  base_url: https://open.bigmodel.cn/api/paas/v4
   api_key: ${LLM_API_KEY}
-  model: deepseek-chat
+  model: glm-5.3
   temperature: 0.8
   max_tokens: 600
   timeout_seconds: 60

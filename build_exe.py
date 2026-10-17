@@ -29,6 +29,8 @@ def main() -> int:
         "--noconfirm", "--clean",
         "--onefile", "--windowed",
         "--name", "ai-im-bot",
+        "--icon", str(ROOT / "icon.ico"),
+        "--add-data", f"{ROOT / 'icon.png'}{sep}.",
         "--add-data", f"{ROOT / 'aibot' / 'web' / 'index.html'}{sep}aibot/web",
         "--hidden-import", "aibot.adapters.onebot",
         "--hidden-import", "aibot.adapters.mock",
