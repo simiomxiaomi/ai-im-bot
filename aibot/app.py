@@ -29,7 +29,7 @@ class Application:
         self.store = Store(cfg.db_path, history_limit=max(200, cfg.llm.history_turns * 10))
         self.llm = LLMClient(cfg.llm)
         self.adapter = build_adapter(cfg)
-        self.policy = PolicyEngine(cfg.policy)
+        self.policy = PolicyEngine(cfg.policy, self.store.get_user_status)
         self.pipeline = Pipeline(cfg, self.store, self.llm, self.adapter, self.policy)
         self.pipeline.command_handler = GroupHelper(cfg).handle
         self.greeter = Greeter(cfg, self.store, self.llm, self.adapter)

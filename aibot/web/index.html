@@ -117,6 +117,16 @@
   .result { margin-top: 10px; font-size: 12px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
   .result.ok { color: var(--green); }
   .result.err { color: var(--red); }
+  .user-list { display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow-y: auto; margin-top: 8px; }
+  .user-row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border: 1px solid var(--line); border-radius: 7px; font-size: 12px;
+  }
+  .user-row .uid { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .user-row .allowed { color: var(--green); }
+  .user-row .blocked { color: var(--red); }
+  .user-row button { width: auto; padding: 3px 8px; font-size: 11px; }
+  .user-empty { color: var(--muted); font-size: 12px; padding: 10px 0; text-align: center; }
   .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); margin: 8px 0 10px; }
   .check input { width: auto; }
   pre.logs { max-height: 200px; overflow: auto; margin: 0; font-size: 11px; line-height: 1.55; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
@@ -188,10 +198,26 @@
     </section>
 
     <section class="panel">
+      <div class="panel-head"><b>用户管理</b><span class="tag" id="user-count"></span></div>
+      <div class="panel-body">
+        <div class="row">
+          <input id="u-id" placeholder="QQ 号，例如 123456789">
+          <select id="u-status" style="width:auto">
+            <option value="allowed">白名单</option>
+            <option value="blocked">黑名单</option>
+          </select>
+          <button id="btn-user-add" style="width:auto">添加</button>
+        </div>
+        <div class="user-list" id="user-list"></div>
+        <div class="result" id="u-result"></div>
+      </div>
+    </section>
+
+    <section class="panel">
       <div class="panel-head"><b>记忆管理</b></div>
       <div class="panel-body">
-        <label class="field">会话 key（形如 qq:private:10001）</label>
-        <input id="reset-key" placeholder="qq:private:10001" style="margin-bottom:10px">
+        <label class="field">会话 key（形如 onebot:private:10001）</label>
+        <input id="reset-key" placeholder="onebot:private:10001" style="margin-bottom:10px">
         <div class="row">
           <button id="btn-reset">清空该会话记忆</button>
           <button id="btn-reset-all" class="ghost">全部清空</button>
@@ -251,7 +277,9 @@
       : '<span class="tag priv">私聊</span>';
     const reason = (!isOut && m.allowed === 0 && m.reason)
       ? '<span class="tag warn">拦截：' + esc(m.reason) + '</span>' : '';
-    const who = isOut ? 'AI / 我' : (m.sender_name || m.sender_id || '未知');
+    const who = isOut
+      ? 'AI / 我'
+      : ((m.sender_name || '未知') + (m.sender_id ? '（' + m.sender_id + '）' : ''));
     const extra = isOut && m.reason ? ' · ' + esc(m.reason) : '';
     el.innerHTML =
       '<div class="meta">' + typeTag +
@@ -330,6 +358,80 @@
     }
   }
 
+  async function loadUsers() {
+    try {
+      const data = await api('/api/users');
+      renderUsers(data.users || []);
+    } catch (err) { /* ignore */ }
+  }
+
+  function renderUsers(users) {
+    const box = $('user-list');
+    box.innerHTML = '';
+    $('user-count').textContent = users.length ? users.length + ' 个' : '';
+    if (!users.length) {
+      box.innerHTML = '<div class="user-empty">还没有托管用户，添加一个 QQ 号试试</div>';
+      return;
+    }
+    users.forEach((u) => {
+      const row = document.createElement('div');
+      row.className = 'user-row';
+      const blocked = u.status === 'blocked';
+      row.innerHTML =
+        '<span class="uid">' + esc(u.user_id) + '</span>' +
+        '<span class="' + (blocked ? 'blocked' : 'allowed') + '">' + (blocked ? '黑名单' : '白名单') + '</span>' +
+        '<button data-action="toggle" data-id="' + esc(u.user_id) + '" data-status="' + esc(u.status) + '">' +
+        (blocked ? '移入白名单' : '移入黑名单') + '</button>' +
+        '<button class="ghost" data-action="delete" data-id="' + esc(u.user_id) + '">删除</button>';
+      box.appendChild(row);
+    });
+  }
+
+  async function userAction(payload) {
+    try {
+      const data = await api('/api/users', { method: 'POST', body: JSON.stringify(payload) });
+      if (data.ok === false) {
+        $('u-result').className = 'result err';
+        $('u-result').textContent = data.error || '操作失败';
+        return;
+      }
+      $('u-result').className = 'result ok';
+      $('u-result').textContent = '已更新';
+      renderUsers(data.users || []);
+    } catch (err) {
+      $('u-result').className = 'result err';
+      $('u-result').textContent = err.message;
+    }
+  }
+
+  $('btn-user-add').addEventListener('click', () => {
+    const uid = $('u-id').value.trim();
+    if (!uid) return;
+    if (!/^\d{5,12}$/.test(uid)) {
+      $('u-result').className = 'result err';
+      $('u-result').textContent = '请填 QQ 号（纯数字），不要填昵称';
+      return;
+    }
+    userAction({ action: 'add', user_id: uid, status: $('u-status').value });
+    $('u-id').value = '';
+  });
+
+  $('u-id').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') $('btn-user-add').click();
+  });
+
+  $('user-list').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+    const uid = btn.dataset.id;
+    if (btn.dataset.action === 'delete') {
+      if (confirm('删除用户 ' + uid + '？')) userAction({ action: 'delete', user_id: uid });
+    } else {
+      const next = btn.dataset.status === 'blocked' ? 'allowed' : 'blocked';
+      userAction({ action: 'set', user_id: uid, status: next });
+    }
+  });
+
   function formPayload() {
     return {
       session_type: $('t-type').value,
@@ -367,8 +469,10 @@
 
   loadStatus();
   loadMessages();
+  loadUsers();
   setInterval(loadStatus, 2000);
   setInterval(loadMessages, 2000);
+  setInterval(loadUsers, 5000);
 })();
 </script>
 </body>

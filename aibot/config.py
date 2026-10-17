@@ -135,6 +135,7 @@ class Config:
     group: GroupHelperConfig = field(default_factory=GroupHelperConfig)
     web: WebConfig = field(default_factory=WebConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    persona: str = "default"          # 对应 personas/<name>.md
     log_level: str = "INFO"
 
     # 运行期附加信息（不来自 yaml）
@@ -158,6 +159,7 @@ class Config:
 
         cfg = _build(Config, data, path.parent)
         cfg.root = path.parent
+        _apply_persona(cfg)
         cfg.validate()
         return cfg
 
@@ -211,6 +213,19 @@ class Config:
     @property
     def log_path(self) -> Path:
         return self.resolve_path(self.storage.log_path)
+
+
+def _apply_persona(cfg: Config) -> None:
+    """如果配置了 persona，就加载 personas/<name>.md 作为系统提示。"""
+    name = (cfg.persona or "").strip()
+    if not name:
+        return
+    path = cfg.root / "personas" / f"{name}.md"
+    if path.exists():
+        cfg.llm.system_prompt = path.read_text(encoding="utf-8").strip()
+        cfg.warnings.append(f"已加载人格：personas/{name}.md")
+    else:
+        cfg.warnings.append(f"找不到人格文件 personas/{name}.md，使用 llm.system_prompt")
 
 
 def load_dotenv(path: Path | None = None) -> None:

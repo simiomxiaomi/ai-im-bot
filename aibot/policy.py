@@ -20,8 +20,9 @@ class Decision:
 
 
 class PolicyEngine:
-    def __init__(self, cfg: PolicyConfig) -> None:
+    def __init__(self, cfg: PolicyConfig, user_status=None) -> None:
         self.cfg = cfg
+        self._user_status = user_status
         self._recent_global: deque[float] = deque()
         self._recent_sessions: dict[str, deque[float]] = {}
         self._last_reply: dict[str, float] = {}
@@ -30,6 +31,11 @@ class PolicyEngine:
     def check(self, msg: IncomingMessage, now: float | None = None) -> Decision:
         now = self._now() if now is None else now
         cfg = self.cfg
+
+        # 0. 后台托管的用户状态（允许 / 禁用），优先于静态配置
+        status = self._user_status(msg.sender_id) if self._user_status else ""
+        if status == "blocked":
+            return Decision(False, "用户已被后台禁用")
 
         # 1. 黑白名单（黑名单优先，且无论群聊私聊都生效）
         if msg.sender_id in cfg.block_users:
@@ -41,7 +47,8 @@ class PolicyEngine:
         if msg.session_type == "private":
             if cfg.private == "off":
                 return Decision(False, "私聊自动回复已关闭")
-            if cfg.private == "whitelist" and msg.sender_id not in cfg.allow_users:
+            if cfg.private == "whitelist" and msg.sender_id not in cfg.allow_users \
+                    and status != "allowed":
                 return Decision(False, "发送者不在私聊白名单")
         else:
             if cfg.group == "off":

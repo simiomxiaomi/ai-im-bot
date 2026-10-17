@@ -65,6 +65,16 @@ PRESETS = {
 }
 
 
+def persona_names() -> list[str]:
+    """读取 personas/*.md 作为可选人格。"""
+    for base in (APP_DIR / "personas", Path(getattr(sys, "_MEIPASS", APP_DIR)) / "personas"):
+        if base.exists():
+            names = sorted(path.stem for path in base.glob("*.md"))
+            if names:
+                return names
+    return ["default"]
+
+
 class QueueHandler(logging.Handler):
     def __init__(self, log_queue: queue.Queue) -> None:
         super().__init__()
@@ -228,6 +238,13 @@ class BotGUI(tk.Tk):
         self.preset_box.bind("<<ComboboxSelected>>", self._apply_preset)
         row += 1
 
+        label("人格")
+        self.var_persona = tk.StringVar(value="default")
+        self.persona_box = ttk.Combobox(left, textvariable=self.var_persona, state="readonly",
+                                        values=persona_names())
+        self.persona_box.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=(8, 2))
+        row += 1
+
         label("Base URL")
         _, self.var_base_url = entry("https://api.deepseek.com/v1")
         label("API Key")
@@ -276,6 +293,7 @@ class BotGUI(tk.Tk):
         ttk.Button(napcat_btns3, text="自动配置", command=self._auto_config).pack(side="left")
         ttk.Button(napcat_btns3, text="重启 NapCat", command=self._restart_napcat).pack(side="left", padx=6)
         ttk.Button(napcat_btns3, text="卸载", command=self._uninstall_napcat).pack(side="left")
+        ttk.Button(napcat_btns3, text="WebUI", command=self._open_napcat_webui).pack(side="left", padx=6)
 
         tk.Label(left, text="首次使用：测速下载 → 安装 NapCat → 启动 → 扫码 → 自动配置\n"
                              "下载进度会显示在右侧「运行日志」里。",
@@ -337,6 +355,9 @@ class BotGUI(tk.Tk):
         self.var_token.set(platform.get("access_token", self.var_token.get()) or "aibot-token")
         policy = data.get("policy") or {}
         self.var_whitelist.set(", ".join(policy.get("allow_users") or []))
+        self.var_persona.set(str(data.get("persona") or "default"))
+        if self.var_persona.get() not in persona_names():
+            self.var_persona.set("default")
         for name, (base, _model) in PRESETS.items():
             if self.var_base_url.get() == base:
                 self.preset_box.set(name)
@@ -383,6 +404,7 @@ class BotGUI(tk.Tk):
             "storage": {"db_path": "data/bot.db", "log_path": "data/bot.log"},
             "greeting": {"enabled": False, "items": []},
             "group": {"enabled": True, "weather_enabled": True, "hitokoto_enabled": True},
+            "persona": self.var_persona.get().strip() or "default",
             "log_level": "INFO",
         }
 
@@ -624,8 +646,22 @@ class BotGUI(tk.Tk):
         try:
             self.napcat_proc = installer.launch_napcat()
             self._log("NapCat 已启动，请扫码登录小号；WebUI 默认 127.0.0.1:6099")
+            cfg = napcat_webui.find_webui_config()
+            if cfg:
+                token = cfg.get("token", "")
+                port = cfg.get("port") or 6099
+                self._log(f"NapCat WebUI：http://127.0.0.1:{port}/webui?token={token}")
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("启动失败", str(exc))
+
+    def _open_napcat_webui(self) -> None:
+        cfg = napcat_webui.find_webui_config()
+        if not cfg:
+            messagebox.showinfo("提示", "还没找到 NapCat 的 webui.json，请先启动一次 NapCat。")
+            return
+        port = cfg.get("port") or 6099
+        token = cfg.get("token", "")
+        webbrowser.open(f"http://127.0.0.1:{port}/webui?token={token}")
 
     def _auto_config(self) -> None:
         """把 3001 端口的 WebSocket 服务器写进 NapCat 配置。"""
@@ -702,8 +738,18 @@ class BotGUI(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _scan_qr(self) -> None:
-        """从 NapCat WebUI 拉取 QQ 登录二维码，弹窗显示。"""
+        """显示 NapCat 登录二维码（优先本地 cache/qrcode.png）。"""
         def worker():
+            local = installer.find_qrcode_png()
+            if local:
+                try:
+                    png = local.read_bytes()
+                except OSError:
+                    png = None
+                if png:
+                    self.after(0, lambda: self._show_qr(png, 6099, ""))
+                    return
+
             cfg = napcat_webui.find_webui_config() or {}
             try:
                 port = int(cfg.get("port") or napcat_webui.DEFAULT_PORT)
@@ -767,7 +813,10 @@ class BotGUI(tk.Tk):
             def check() -> None:
                 for _ in range(150):
                     try:
-                        if napcat_webui.check_login(port, session):
+                        if session and napcat_webui.check_login(port, session):
+                            self.after(0, done)
+                            return
+                        if not session and installer.port_open(3001):
                             self.after(0, done)
                             return
                     except Exception:  # noqa: BLE001

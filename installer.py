@@ -24,7 +24,7 @@ NAPCAT_URL = (
     "NapCat.Shell.Windows.OneKey.zip"
 )
 NAPCAT_RELEASE_PAGE = "https://github.com/NapNeko/NapCatQQ/releases"
-LAUNCHER_NAMES = ("NapCatWinBootMain.exe", "launcher.bat", "NapCatWinBootMain.bat")
+LAUNCHER_NAMES = ("launcher.bat", "launcher-user.bat", "napcat.bat", "NapCatWinBootMain.exe")
 
 
 def napcat_dir() -> Path:
@@ -36,14 +36,30 @@ def find_launcher(root: Path | None = None) -> Path | None:
     root = root or napcat_dir()
     if not root.exists():
         return None
+
+    # 1. 已安装的 NapCat Shell：优先官方 launcher（它会拼好 QQ 路径和 Hook 参数）
+    for pattern in (
+        "NapCat.*.Shell/versions/*/resources/app/napcat/launcher-user.bat",
+        "NapCat.*.Shell/versions/*/resources/app/napcat/launcher.bat",
+        "NapCat.*.Shell/napcat.bat",
+    ):
+        for path in sorted(root.glob(pattern)):
+            if path.is_file():
+                return path
+
+    # 2. 根目录直接放的启动器
     for name in LAUNCHER_NAMES:
         direct = root / name
-        if direct.exists():
+        if direct.is_file():
             return direct
-    for path in root.rglob("*"):
-        if path.is_file() and path.name in LAUNCHER_NAMES:
-            return path
-    return None
+
+    # 3. 兜底：排除 bootmain 引导器，优先带 versions 的
+    candidates = [
+        path for path in root.rglob("*")
+        if path.is_file() and path.name in LAUNCHER_NAMES and "bootmain" not in path.parts
+    ]
+    candidates.sort(key=lambda path: ("versions" not in path.parts, len(path.parts)))
+    return candidates[0] if candidates else None
 
 
 def is_installed() -> bool:
@@ -270,8 +286,73 @@ def install_napcat() -> subprocess.Popen:
     return subprocess.Popen([str(exe)], cwd=str(exe.parent), creationflags=flags)
 
 
-def launch_napcat(launcher: Path | None = None) -> subprocess.Popen:
-    """启动 NapCat（会拉起 QQ）。没安装时自动打开安装器。"""
+def _find_deep_napcat() -> Path | None:
+    """找到 versions/<ver>/resources/app/napcat 目录。"""
+    for path in napcat_dir().glob("NapCat.*.Shell/versions/*/resources/app/napcat"):
+        if (path / "NapCatWinBootMain.exe").is_file():
+            return path
+    return None
+
+
+def _find_qq_exe() -> Path | None:
+    """找到 QQ.exe：优先进版本目录，其次 Shell 根目录。"""
+    for pattern in ("NapCat.*.Shell/versions/*/QQ.exe", "NapCat.*.Shell/QQ.exe"):
+        for path in napcat_dir().glob(pattern):
+            if path.is_file():
+                return path
+    return None
+
+
+def find_qrcode_png() -> Path | None:
+    """NapCat 登录二维码会保存到 cache/qrcode.png，GUI 可以直接显示。"""
+    for pattern in (
+        "NapCat.*.Shell/versions/*/resources/app/napcat/cache/qrcode.png",
+        "NapCat.*.Shell/cache/qrcode.png",
+    ):
+        for path in napcat_dir().glob(pattern):
+            if path.is_file():
+                return path
+    return None
+
+
+def _launch_elevated(exe: Path, params: str, cwd: Path) -> bool:
+    """用 ShellExecuteW(runas) 以管理员身份启动，会弹 UAC。"""
+    try:
+        import ctypes
+
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", str(exe), params, str(cwd), 1
+        )
+        return result > 32
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def launch_napcat(launcher: Path | None = None) -> subprocess.Popen | None:
+    """启动 NapCat（会拉起 QQ）。
+
+    优先直接用官方参数调用 NapCatWinBootMain.exe：
+        NapCatWinBootMain.exe <QQ.exe> <NapCatWinBootHook.dll>
+    因为安装器解压的 QQ 没有注册表项，官方的 launcher.bat 会找不到 QQ。
+    Hook 注入需要管理员权限，所以优先 runas 提权。
+    """
+    deep = _find_deep_napcat()
+    qq_exe = _find_qq_exe()
+    if deep and qq_exe:
+        exe = deep / "NapCatWinBootMain.exe"
+        hook = deep / "NapCatWinBootHook.dll"
+        if os.name == "nt":
+            # chcp 65001：NapCat 输出 UTF-8，控制台默认 GBK 会乱码
+            command = f'chcp 65001 >nul & "{exe}" "{qq_exe}" "{hook}"'
+            comspec = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
+            if _launch_elevated(Path(comspec), f"/c {command}", deep):
+                return None
+            return subprocess.Popen(
+                ["cmd", "/c", command], cwd=str(deep),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        return subprocess.Popen([str(exe), str(qq_exe), str(hook)], cwd=str(deep))
+
     launcher = launcher or find_launcher()
     if launcher is None:
         if (napcat_dir() / "NapCatInstaller.exe").exists():

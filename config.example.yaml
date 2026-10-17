@@ -3,6 +3,10 @@
 #  复制为 config.yaml 后修改。敏感值建议放 .env 用 ${VAR} 引用。
 # ============================================================
 
+# 人格：对应 personas/<name>.md（default / warm / funny / assistant）
+# 留空则使用下面 llm.system_prompt
+persona: default
+
 platform:
   # onebot = 连接 QQ（NapCat / Lagrange 等 OneBot v11 实现）
   # mock   = 本地模拟，不连任何客户端，用于调试

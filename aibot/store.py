@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS managed_users (
+    user_id    TEXT PRIMARY KEY,
+    status     TEXT NOT NULL DEFAULT 'allowed',   -- allowed / blocked
+    note       TEXT DEFAULT '',
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -168,6 +175,49 @@ class Store:
             cur = self._conn.execute("DELETE FROM memory")
             self._conn.commit()
             return cur.rowcount
+
+    # ------------------------------------------------------------------ 托管用户
+
+    def list_users(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT user_id, status, note, created_at FROM managed_users ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_user_status(self, user_id: str) -> str:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT status FROM managed_users WHERE user_id=?", (str(user_id),)
+            ).fetchone()
+        return row["status"] if row else ""
+
+    def add_user(self, user_id: str, status: str = "allowed", note: str = "") -> None:
+        if status not in {"allowed", "blocked"}:
+            raise ValueError("status 只能是 allowed / blocked")
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO managed_users(user_id, status, note, created_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET status=excluded.status, note=excluded.note",
+                (str(user_id), status, note, time.time()),
+            )
+            self._conn.commit()
+
+    def set_user_status(self, user_id: str, status: str) -> bool:
+        if status not in {"allowed", "blocked"}:
+            raise ValueError("status 只能是 allowed / blocked")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE managed_users SET status=? WHERE user_id=?", (status, str(user_id))
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def remove_user(self, user_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM managed_users WHERE user_id=?", (str(user_id),))
+            self._conn.commit()
+            return cur.rowcount > 0
 
     # ------------------------------------------------------------------ 开关
 

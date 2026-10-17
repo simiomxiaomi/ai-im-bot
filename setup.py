@@ -95,6 +95,11 @@ def install(target_dir: Path, log=print, make_shortcut: bool = True) -> tuple[Pa
             shutil.copy2(source, target_dir / name)
             log(f"已复制 {name}")
 
+    personas_src = resource("personas")
+    if personas_src.exists():
+        shutil.copytree(personas_src, target_dir / "personas", dirs_exist_ok=True)
+        log("已复制 personas/")
+
     if not make_shortcut:
         return target_dir, None
 

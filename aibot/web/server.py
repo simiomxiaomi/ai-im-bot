@@ -71,6 +71,8 @@ def _make_handler(server: WebServer):
                     self._guard(self._json, {"messages": server.app.store.recent_messages(limit, since)})
                 elif parsed.path == "/api/sessions":
                     self._guard(self._json, {"sessions": _sessions(server.app)})
+                elif parsed.path == "/api/users":
+                    self._guard(self._json, {"users": server.app.store.list_users()})
                 elif parsed.path == "/api/config":
                     self._guard(self._json, _public_config(server.cfg))
                 elif parsed.path == "/api/logs":
@@ -97,6 +99,8 @@ def _make_handler(server: WebServer):
                     self._guard(self._send_manual, body)
                 elif parsed.path == "/api/reset":
                     self._guard(self._reset, body)
+                elif parsed.path == "/api/users":
+                    self._guard(self._users, body)
                 elif parsed.path == "/api/shutdown":
                     self._guard(self._shutdown, body)
                 else:
@@ -111,6 +115,30 @@ def _make_handler(server: WebServer):
             if "auto_reply" in body:
                 server.app.pipeline.set_auto_reply(bool(body["auto_reply"]))
             self._json({"ok": True, "status": server.app.status()})
+
+        def _users(self, body: dict[str, Any]) -> None:
+            action = str(body.get("action", "add")).lower()
+            user_id = str(body.get("user_id", "")).strip()
+            store = server.app.store
+            if not user_id:
+                self._json({"ok": False, "error": "QQ 号不能为空"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                if action == "add":
+                    store.add_user(user_id, status=str(body.get("status", "allowed")),
+                                   note=str(body.get("note", "")))
+                elif action == "delete":
+                    store.remove_user(user_id)
+                elif action == "set":
+                    store.set_user_status(user_id, str(body.get("status", "allowed")))
+                else:
+                    self._json({"ok": False, "error": "action 只能是 add/delete/set"},
+                               HTTPStatus.BAD_REQUEST)
+                    return
+            except ValueError as exc:
+                self._json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._json({"ok": True, "users": store.list_users()})
 
         def _test(self, body: dict[str, Any]) -> None:
             text = str(body.get("text", "")).strip()

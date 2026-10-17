@@ -147,8 +147,23 @@ reply:
 | `reply.fallback` | 模型失败时的兜底回复 |
 | `greeting.items` | 定时问候（时间、抖动、目标、AI/模板） |
 | `group` | 群助手开关与帮助文案 |
+| `persona` | 人格文件名，对应 `personas/<name>.md` |
 
 密钥放 `.env`，支持 `${VAR}` 与 `${VAR:-默认值}`。
+
+### 人格
+
+`persona: default` 会加载 [`personas/default.md`](personas/default.md) 作为系统提示，内置：
+
+| 人格 | 风格 |
+|---|---|
+| `default` | 私人助理，口语化、简短 |
+| `warm` | 温柔、会关心人 |
+| `funny` | 幽默损友，爱开玩笑 |
+| `assistant` | 专业、克制 |
+
+想加自己的：在 `personas/` 下新建 `my.md`，重启后在 GUI「人格」下拉里选 `my`。
+人格文件是纯文本，写自然语言提示即可。
 
 ---
 
