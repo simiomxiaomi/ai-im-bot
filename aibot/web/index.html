@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-IM-Bot · 控制台</title>
+<style>
+  :root {
+    --bg: #080b0e;
+    --panel: #0e1418;
+    --panel-2: #111a1f;
+    --line: rgba(80, 220, 180, .16);
+    --line-strong: rgba(80, 220, 180, .38);
+    --fg: #cfe6df;
+    --muted: #6f8b85;
+    --green: #35e0b0;
+    --blue: #4ea1ff;
+    --amber: #ffc857;
+    --red: #ff6b6b;
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); font-family: var(--mono);
+    background-image:
+      radial-gradient(900px 500px at 85% -10%, rgba(53, 224, 176, .09), transparent 60%),
+      radial-gradient(700px 400px at -10% 110%, rgba(78, 161, 255, .07), transparent 60%),
+      linear-gradient(rgba(80, 220, 180, .035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(80, 220, 180, .035) 1px, transparent 1px);
+    background-size: auto, auto, 32px 32px, 32px 32px;
+  }
+  header {
+    display: flex; align-items: center; gap: 18px; padding: 14px 22px;
+    border-bottom: 1px solid var(--line); backdrop-filter: blur(6px);
+    position: sticky; top: 0; z-index: 5; background: rgba(8, 11, 14, .82);
+  }
+  .logo { font-size: 17px; font-weight: 700; letter-spacing: .06em; color: var(--green); }
+  .logo span { color: var(--muted); font-weight: 400; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px;
+    border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--muted);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 9px currentColor; }
+  .dot.on { background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .spacer { flex: 1; }
+  .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; font-size: 13px; }
+  .switch input { display: none; }
+  .track {
+    width: 42px; height: 22px; border-radius: 999px; background: #1b2a2e; position: relative;
+    border: 1px solid var(--line); transition: .2s;
+  }
+  .track::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--muted); transition: .2s;
+  }
+  .switch input:checked + .track { background: rgba(53, 224, 176, .18); border-color: var(--line-strong); }
+  .switch input:checked + .track::after { left: 22px; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  main {
+    display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px;
+    padding: 16px 22px 24px; max-width: 1400px; margin: 0 auto; align-items: start;
+  }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+  .stat {
+    border: 1px solid var(--line); background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .stat b { display: block; font-size: 24px; color: var(--green); font-weight: 600; letter-spacing: .02em; }
+  .stat.blue b { color: var(--blue); }
+  .stat.amber b { color: var(--amber); }
+  .stat.plain b { color: var(--fg); }
+  .stat span { font-size: 11px; color: var(--muted); letter-spacing: .08em; }
+  section.panel { border: 1px solid var(--line); border-radius: 12px; background: rgba(14, 20, 24, .72); }
+  .panel-head {
+    display: flex; align-items: center; gap: 10px; padding: 11px 15px;
+    border-bottom: 1px solid var(--line); font-size: 12px; letter-spacing: .1em; color: var(--muted);
+  }
+  .panel-head b { color: var(--fg); font-weight: 600; letter-spacing: .04em; }
+  .panel-body { padding: 14px 15px; }
+  #feed { height: calc(100vh - 260px); min-height: 380px; overflow-y: auto; padding: 14px 15px; scroll-behavior: smooth; }
+  #feed::-webkit-scrollbar { width: 9px; }
+  #feed::-webkit-scrollbar-thumb { background: #1d2d31; border-radius: 8px; }
+  .msg {
+    border: 1px solid var(--line); border-left: 2px solid var(--blue);
+    background: var(--panel); border-radius: 8px; padding: 9px 12px; margin-bottom: 9px;
+    animation: in .18s ease-out;
+  }
+  @keyframes in { from { opacity: 0; transform: translateY(5px); } }
+  .msg.out { border-left-color: var(--green); margin-left: 12%; background: #0c1517; }
+  .msg.blocked { border-left-color: var(--amber); opacity: .8; }
+  .msg .meta { font-size: 11px; color: var(--muted); margin-bottom: 5px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .msg .meta b { color: var(--fg); font-weight: 600; }
+  .msg .text { font-size: 13.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+  .tag { border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 10px; color: var(--muted); }
+  .tag.priv { color: var(--blue); border-color: rgba(78, 161, 255, .35); }
+  .tag.group { color: var(--amber); border-color: rgba(255, 200, 87, .35); }
+  .tag.warn { color: var(--amber); border-color: rgba(255, 200, 87, .4); }
+  .empty { color: var(--muted); text-align: center; padding: 46px 10px; font-size: 13px; }
+  aside { display: flex; flex-direction: column; gap: 14px; }
+  label.field { display: block; font-size: 11px; color: var(--muted); margin: 0 0 5px; letter-spacing: .06em; }
+  input, select, textarea, button {
+    font-family: var(--mono); font-size: 13px; color: var(--fg);
+    background: #0a1114; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; width: 100%;
+    outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px rgba(53, 224, 176, .08); }
+  textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .row > * { flex: 1; }
+  .row.tight > * { flex: 0 0 auto; }
+  button { cursor: pointer; background: rgba(53, 224, 176, .1); border-color: rgba(53, 224, 176, .32); color: var(--green); }
+  button:hover { background: rgba(53, 224, 176, .17); }
+  button.ghost { background: transparent; color: var(--muted); border-color: var(--line); }
+  button.ghost:hover { color: var(--fg); border-color: var(--line-strong); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .result { margin-top: 10px; font-size: 12px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  .result.ok { color: var(--green); }
+  .result.err { color: var(--red); }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); margin: 8px 0 10px; }
+  .check input { width: auto; }
+  pre.logs { max-height: 200px; overflow: auto; margin: 0; font-size: 11px; line-height: 1.55; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
+  footer { text-align: center; color: #43504e; font-size: 11px; padding: 8px 0 20px; }
+  @media (max-width: 1080px) {
+    main { grid-template-columns: 1fr; }
+    #feed { height: 52vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">AI-IM-BOT <span>/ console</span></div>
+  <div class="pill"><i class="dot" id="dot"></i><span id="conn">连接中…</span></div>
+  <div class="pill" id="platform-pill">platform: —</div>
+  <div class="pill" id="model-pill">model: —</div>
+  <div class="spacer"></div>
+  <label class="switch" title="关闭后只记录消息，不再调用 AI">
+    <input type="checkbox" id="auto-reply">
+    <span class="track"></span>
+    <span>自动回复</span>
+  </label>
+</header>
+
+<main>
+  <div>
+    <div class="stats">
+      <div class="stat"><b id="s-in">0</b><span>今日收到</span></div>
+      <div class="stat blue"><b id="s-out">0</b><span>今日回复</span></div>
+      <div class="stat amber"><b id="s-blocked">0</b><span>今日拦截</span></div>
+      <div class="stat plain"><b id="s-sessions">0</b><span>今日会话</span></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><b>消息流</b><span id="feed-count"></span><span class="spacer"></span><span>实时轮询 2s</span></div>
+      <div id="feed"><div class="empty">还没有消息。右上角打开自动回复，用右侧「测试」发一条试试。</div></div>
+    </section>
+    <footer>本地运行 · 消息只保存在你自己的 SQLite 里 · 关掉页面不影响机器人</footer>
+  </div>
+
+  <aside>
+    <section class="panel">
+      <div class="panel-head"><b>测试 / 手动发送</b></div>
+      <div class="panel-body">
+        <div class="row">
+          <div>
+            <label class="field">会话类型</label>
+            <select id="t-type">
+              <option value="private">私聊</option>
+              <option value="group">群聊</option>
+            </select>
+          </div>
+          <div>
+            <label class="field">会话 ID（QQ号/群号）</label>
+            <input id="t-id" value="10001" placeholder="10001">
+          </div>
+        </div>
+        <label class="field">发送者昵称</label>
+        <input id="t-name" value="测试用户" style="margin-bottom:10px">
+        <label class="field">消息内容</label>
+        <textarea id="t-text" placeholder="随便说点什么，比如：在吗？"></textarea>
+        <label class="check"><input type="checkbox" id="t-at" checked> 群聊时视为 @ 了我</label>
+        <div class="row">
+          <button id="btn-test">走管线（会真实发送）</button>
+          <button id="btn-send" class="ghost">直接发送</button>
+        </div>
+        <div class="result" id="t-result"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><b>记忆管理</b></div>
+      <div class="panel-body">
+        <label class="field">会话 key（形如 qq:private:10001）</label>
+        <input id="reset-key" placeholder="qq:private:10001" style="margin-bottom:10px">
+        <div class="row">
+          <button id="btn-reset">清空该会话记忆</button>
+          <button id="btn-reset-all" class="ghost">全部清空</button>
+        </div>
+        <div class="result" id="r-result"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><b>运行日志</b><button class="ghost" id="btn-logs" style="width:auto;padding:3px 9px;font-size:11px">刷新</button></div>
+      <div class="panel-body"><pre class="logs" id="logs">点击「刷新」加载最近日志</pre></div>
+    </section>
+  </aside>
+</main>
+
+<script>
+(function () {
+  const qs = new URLSearchParams(location.search);
+  let token = qs.get('token') || localStorage.getItem('aibot_token') || '';
+  if (qs.get('token')) localStorage.setItem('aibot_token', token);
+
+  const $ = (id) => document.getElementById(id);
+  let lastId = 0;
+  let feedEmpty = true;
+  let busy = false;
+
+  async function api(path, options = {}) {
+    const headers = Object.assign({}, options.headers || {});
+    if (token) headers['X-Admin-Token'] = token;
+    if (options.body) headers['Content-Type'] = 'application/json';
+    const res = await fetch(path, Object.assign({}, options, { headers }));
+    if (res.status === 401) throw new Error('鉴权失败：检查 URL 里的 token');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+
+  function esc(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  }
+
+  function fmtTime(ts) {
+    const d = new Date(ts * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  function renderMessage(m) {
+    const feed = $('feed');
+    if (feedEmpty) { feed.innerHTML = ''; feedEmpty = false; }
+    const el = document.createElement('div');
+    const isOut = m.direction === 'out';
+    el.className = 'msg' + (isOut ? ' out' : '') + (!isOut && m.allowed === 0 ? ' blocked' : '');
+    const typeTag = m.session_type === 'group'
+      ? '<span class="tag group">群聊</span>'
+      : '<span class="tag priv">私聊</span>';
+    const reason = (!isOut && m.allowed === 0 && m.reason)
+      ? '<span class="tag warn">拦截：' + esc(m.reason) + '</span>' : '';
+    const who = isOut ? 'AI / 我' : (m.sender_name || m.sender_id || '未知');
+    const extra = isOut && m.reason ? ' · ' + esc(m.reason) : '';
+    el.innerHTML =
+      '<div class="meta">' + typeTag +
+      '<b>' + esc(who) + '</b>' +
+      '<span>' + esc(m.session_name || m.session_id) + '</span>' +
+      '<span>' + fmtTime(m.ts) + '</span>' + reason + extra + '</div>' +
+      '<div class="text">' + esc(m.text || '（空）') + '</div>';
+    feed.appendChild(el);
+
+    while (feed.children.length > 300) feed.removeChild(feed.firstChild);
+    const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
+    if (nearBottom) feed.scrollTop = feed.scrollHeight;
+    lastId = Math.max(lastId, m.id);
+  }
+
+  async function loadStatus() {
+    try {
+      const st = await api('/api/status');
+      const ad = st.adapter || {};
+      const on = !!ad.connected || st.platform === 'mock';
+      $('dot').className = 'dot' + (on ? ' on' : '');
+      $('conn').textContent = on ? ('在线 · ' + (ad.self_id || st.platform)) : '离线（等待连接）';
+      $('platform-pill').textContent = 'platform: ' + st.platform;
+      $('model-pill').textContent = 'model: ' + st.model;
+      $('s-in').textContent = st.stats.today_incoming;
+      $('s-out').textContent = st.stats.today_outgoing;
+      $('s-blocked').textContent = st.stats.today_blocked;
+      $('s-sessions').textContent = st.stats.today_sessions;
+      $('auto-reply').checked = !!(st.pipeline && st.pipeline.auto_reply);
+    } catch (err) {
+      $('dot').className = 'dot';
+      $('conn').textContent = err.message;
+    }
+  }
+
+  async function loadMessages() {
+    try {
+      const data = await api('/api/messages?since=' + lastId + '&limit=80');
+      data.messages.forEach(renderMessage);
+      $('feed-count').textContent = lastId ? '#' + lastId : '';
+    } catch (err) { /* 状态栏已提示 */ }
+  }
+
+  $('auto-reply').addEventListener('change', async (ev) => {
+    if (busy) return;
+    busy = true;
+    try {
+      await api('/api/control', { method: 'POST', body: JSON.stringify({ auto_reply: ev.target.checked }) });
+      await loadStatus();
+    } catch (err) {
+      alert(err.message);
+      await loadStatus();
+    } finally { busy = false; }
+  });
+
+  async function runAction(path, payload, resultEl, btn) {
+    btn.disabled = true;
+    resultEl.className = 'result';
+    resultEl.textContent = '处理中…';
+    try {
+      const data = await api(path, { method: 'POST', body: JSON.stringify(payload) });
+      if (data.ok === false) {
+        resultEl.className = 'result err';
+        resultEl.textContent = '失败：' + (data.error || '未知错误');
+      } else {
+        resultEl.className = 'result ok';
+        resultEl.textContent = JSON.stringify(data, null, 2);
+      }
+    } catch (err) {
+      resultEl.className = 'result err';
+      resultEl.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      loadMessages();
+      loadStatus();
+    }
+  }
+
+  function formPayload() {
+    return {
+      session_type: $('t-type').value,
+      session_id: $('t-id').value.trim(),
+      sender_name: $('t-name').value.trim() || '测试用户',
+      text: $('t-text').value,
+      is_at_me: $('t-at').checked,
+    };
+  }
+
+  $('btn-test').addEventListener('click', () => {
+    runAction('/api/test', formPayload(), $('t-result'), $('btn-test'));
+  });
+
+  $('btn-send').addEventListener('click', () => {
+    runAction('/api/send', formPayload(), $('t-result'), $('btn-send'));
+  });
+
+  $('btn-reset').addEventListener('click', () => {
+    runAction('/api/reset', { session_key: $('reset-key').value.trim() }, $('r-result'), $('btn-reset'));
+  });
+
+  $('btn-reset-all').addEventListener('click', () => {
+    if (!confirm('确定清空所有会话的上下文记忆？')) return;
+    runAction('/api/reset', { all: true }, $('r-result'), $('btn-reset-all'));
+  });
+
+  $('btn-logs').addEventListener('click', async () => {
+    try {
+      const data = await api('/api/logs?lines=120');
+      $('logs').textContent = data.lines.join('\n') || '（暂无日志）';
+      $('logs').scrollTop = $('logs').scrollHeight;
+    } catch (err) { $('logs').textContent = err.message; }
+  });
+
+  loadStatus();
+  loadMessages();
+  setInterval(loadStatus, 2000);
+  setInterval(loadMessages, 2000);
+})();
+</script>
+</body>
+</html>

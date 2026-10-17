@@ -1,0 +1,110 @@
+# ============================================================
+#  AI-IM-Bot 配置文件
+#  复制为 config.yaml 后修改。敏感值建议放 .env 用 ${VAR} 引用。
+# ============================================================
+
+platform:
+  # onebot = 连接 QQ（NapCat / Lagrange 等 OneBot v11 实现）
+  # mock   = 本地模拟，不连任何客户端，用于调试
+  # wechat = 微信 UI 自动化（仅 3.9.x，见 README）
+  type: onebot
+
+  onebot:
+    # forward：本程序主动连 NapCat 的 WebSocket 服务（推荐，NapCat 默认 3001）
+    # reverse：本程序起 WS 服务，让 NapCat 反向连过来（适合 NapCat 在另一台机器/容器）
+    mode: forward
+    ws_url: ws://127.0.0.1:3001
+    access_token: ${ONEBOT_ACCESS_TOKEN}
+    self_id: ""                 # 机器人 QQ 号，留空自动识别
+
+    reverse_host: 127.0.0.1
+    reverse_port: 6700
+    reverse_path: /onebot/v11/ws
+    reverse_token: ${ONEBOT_REVERSE_TOKEN}
+
+  wechat:
+    window_name: 微信
+    # 发送快捷键：enter 或 ctrl+enter，需与微信设置里「发送消息」一致
+    send_key: enter
+    poll_interval: 1.0          # 轮询未读的间隔（秒）
+
+llm:
+  base_url: https://api.deepseek.com/v1
+  api_key: ${LLM_API_KEY}
+  model: deepseek-chat
+  temperature: 0.8
+  max_tokens: 600
+  timeout_seconds: 60
+  history_turns: 8              # 每个会话携带最近多少轮上下文
+  max_reply_chars: 500          # 单条回复最大字数，超出截断
+
+  system_prompt: |
+    你是我的私人助理，正在用我的 QQ 号替我回复消息。
+    要求：
+    1. 用口语化中文回复，像真人聊天，不要用书面语和列表。
+    2. 回复要短，一般 1~3 句，别长篇大论。
+    3. 不知道的事就直说，不要编造。
+    4. 涉及转账、借钱、验证码、账号密码、点击链接，一律不承诺，回复「这个我稍后确认一下」。
+    5. 不要暴露你是 AI，除非对方直接问。
+
+policy:
+  # 私聊：whitelist 仅 allow_users 里的人 | all 所有人 | off 关闭
+  private: whitelist
+  # 群聊：off 关闭 | mention 只有 @ 机器人时回复 | all 所有消息都回
+  group: mention
+  allow_users: []               # QQ 号字符串，例如 ["123456789"]
+  block_users: []
+  allow_groups: []              # 留空表示所有群
+  block_groups: []
+  keywords: []                  # 非空时，消息必须包含其中一个词才会触发
+  quiet_hours: []               # 例如 ["23:30-08:00"]，此区间不自动回复
+  cooldown_seconds: 5           # 同一会话两次回复的最小间隔
+  max_per_minute: 6             # 全局每分钟最多回复条数
+  max_per_session_per_hour: 30  # 单会话每小时上限
+
+reply:
+  prefix: ""
+  suffix: ""
+  group_at_sender: true         # 群里回复时是否 @ 提问者
+  fallback: ""                  # AI 调用失败时的兜底回复，留空表示不回复
+  dry_run: false                # true = 只生成不发送，便于观察
+
+# 定时问候（从 EverydayWechat 的 alarm_info 迁移而来）
+greeting:
+  enabled: false
+  items:
+    - name: 早安
+      time: "08:30"
+      jitter: 120               # 08:30~08:32 内随机发，避免每天同一秒
+      friends: []               # QQ 号，例如 ["123456789"]
+      groups: []                # 群号
+      mode: ai                  # ai = 模型生成 / fixed = 模板拼接
+      prompt: "发一条自然的早安，结合今天的日期和天气，别太肉麻。"
+      weather_city: ""          # 填城市名则把天气作为素材
+      start_date: ""            # 例如 "2024-05-20"，会计算第几天
+      start_date_msg: "认识你的第{}天"
+      weekdays: [1, 2, 3, 4, 5, 6, 7]
+
+# 群助手：帮助 / 天气 / 每日一句，其余交给 AI
+group:
+  enabled: true
+  weather_enabled: true
+  hitokoto_enabled: true
+  help_text: |
+    群助手可用：
+    · 天气 北京
+    · 每日一句
+    · 帮助
+    其他话直接说，我会用 AI 回你。
+
+web:
+  enabled: true
+  host: 127.0.0.1
+  port: 8787
+  token: ${WEB_TOKEN}
+
+storage:
+  db_path: data/bot.db
+  log_path: data/bot.log
+
+log_level: INFO
