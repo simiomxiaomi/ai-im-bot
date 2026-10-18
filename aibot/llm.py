@@ -2,6 +2,8 @@
 
 适配 DeepSeek / 通义 / Kimi / 硅基流动 / one-api 中转 / Ollama 等，
 只需要 base_url + api_key + model。
+
+同时解析 `reasoning_content`（智谱 GLM-5.x、DeepSeek-R1 等推理模型）。
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ class LLMClient:
     def __init__(self, cfg: LLMConfig) -> None:
         self.cfg = cfg
         self.last_usage: dict[str, Any] = {}
+        self.last_reasoning = ""
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(cfg.timeout_seconds, connect=15.0),
             limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
@@ -47,6 +50,22 @@ class LLMClient:
         max_tokens: int | None = None,
         attempts: int = 3,
     ) -> str:
+        content, _reasoning = await self.chat_with_reasoning(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            attempts=attempts,
+        )
+        return content
+
+    async def chat_with_reasoning(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        attempts: int = 3,
+    ) -> tuple[str, str]:
         payload: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": messages,
@@ -54,6 +73,14 @@ class LLMClient:
             "max_tokens": self.cfg.max_tokens if max_tokens is None else max_tokens,
             "stream": False,
         }
+        thinking = self.cfg.thinking
+        if thinking in {"low", "high", "max"}:
+            if "bigmodel.cn" in self.cfg.base_url:
+                # 智谱 GLM-5.x 只接受 enabled 形式，low/high/max 会 400
+                payload["thinking"] = {"type": "enabled"}
+            else:
+                payload["reasoning_effort"] = thinking
+
         headers = {
             "Authorization": f"Bearer {self.cfg.api_key}",
             "Content-Type": "application/json",
@@ -71,13 +98,14 @@ class LLMClient:
                 last_error = f"网络错误：{exc.__class__.__name__}: {exc}"
             else:
                 if resp.status_code == 200:
-                    text = self._extract(resp)
+                    content, reasoning = self._extract(resp)
                     self.last_usage = {
                         "usage": (resp.json() or {}).get("usage", {}),
                         "elapsed_ms": int((time.monotonic() - started) * 1000),
                         "model": self.cfg.model,
                     }
-                    return text
+                    self.last_reasoning = reasoning
+                    return content, reasoning
                 body = (resp.text or "")[:300].replace("\n", " ")
                 last_error = f"HTTP {resp.status_code}: {body}"
                 if 400 <= resp.status_code < 500 and resp.status_code not in (408, 429):
@@ -99,7 +127,7 @@ class LLMClient:
             reply = await self.chat(
                 [{"role": "user", "content": "只回复两个字：在线"}],
                 temperature=0.0,
-                max_tokens=16,
+                max_tokens=32,
                 attempts=1,
             )
         except Exception as exc:  # noqa: BLE001 - 自检需要把所有异常转成可读文本
@@ -107,11 +135,31 @@ class LLMClient:
         elapsed = int((time.monotonic() - started) * 1000)
         return True, f"{self.cfg.model} 响应 {elapsed}ms：{(reply or '').strip()[:40]}"
 
+    async def list_models(self) -> list[str]:
+        """调用 /models 获取可用模型列表（OpenAI 兼容接口）。"""
+        headers = {"Authorization": f"Bearer {self.cfg.api_key}"}
+        url = f"{self.cfg.base_url.rstrip('/')}/models"
+        try:
+            resp = await self._client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise LLMError(f"获取模型列表失败：{exc}") from exc
+        items = data.get("data") or data.get("models") or []
+        models = sorted({
+            str(item.get("id"))
+            for item in items
+            if isinstance(item, dict) and item.get("id")
+        })
+        if not models:
+            raise LLMError("接口没有返回模型列表")
+        return models
+
     async def close(self) -> None:
         await self._client.aclose()
 
     @staticmethod
-    def _extract(resp: httpx.Response) -> str:
+    def _extract(resp: httpx.Response) -> tuple[str, str]:
         try:
             data = resp.json()
         except ValueError as exc:
@@ -119,11 +167,19 @@ class LLMClient:
         choices = data.get("choices") or []
         if not choices:
             raise LLMError(f"响应缺少 choices：{str(data)[:200]}")
-        content = (choices[0].get("message") or {}).get("content")
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        reasoning = str(message.get("reasoning_content") or "").strip()
         if isinstance(content, list):
             content = "".join(
                 part.get("text", "") for part in content if isinstance(part, dict)
             )
         if not isinstance(content, str) or not content.strip():
-            raise LLMError("模型返回了空内容")
-        return content.strip()
+            finish = choices[0].get("finish_reason")
+            if reasoning:
+                raise LLMError(
+                    "模型只返回了推理内容，正文为空（finish={}）。"
+                    "请把 llm.max_tokens 调到 1024 以上，或关闭 thinking。".format(finish)
+                )
+            raise LLMError(f"模型返回了空内容（finish={finish}）")
+        return content.strip(), reasoning

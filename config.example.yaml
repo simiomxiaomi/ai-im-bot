@@ -45,7 +45,8 @@ llm:
   api_key: ${LLM_API_KEY}
   model: glm-5.3
   temperature: 0.8
-  max_tokens: 600
+  max_tokens: 1024
+  thinking: auto                # auto / off / low / high / max（智谱 5.x 只接受 enabled，low 会 400）
   timeout_seconds: 60
   history_turns: 8              # 每个会话携带最近多少轮上下文
   max_reply_chars: 500          # 单条回复最大字数，超出截断
@@ -80,6 +81,8 @@ reply:
   group_at_sender: true         # 群里回复时是否 @ 提问者
   fallback: ""                  # AI 调用失败时的兜底回复，留空表示不回复
   dry_run: false                # true = 只生成不发送，便于观察
+  send_reasoning: false         # 把模型思考过程（reasoning_content）也发出去
+  segment_chars: 0              # >0 时按字数分段发送长回复，0 = 不分段
 
 # 定时问候（从 EverydayWechat 的 alarm_info 迁移而来）
 greeting:

@@ -65,6 +65,28 @@ def clean_reply(text: str, max_chars: int) -> str:
     return text
 
 
+def split_text(text: str, limit: int) -> list[str]:
+    """按字数分段，优先在换行/句号处切分。limit<=0 时不拆。"""
+    text = (text or "").strip()
+    if limit <= 0 or len(text) <= limit:
+        return [text] if text else []
+    parts: list[str] = []
+    rest = text
+    while rest:
+        if len(rest) <= limit:
+            parts.append(rest.strip())
+            break
+        window = rest[:limit]
+        cut = window.rfind("\n")
+        if cut < limit // 2:
+            cut = max(window.rfind(ch) for ch in "。！？；")
+        if cut < limit // 2:
+            cut = limit - 1
+        parts.append(rest[: cut + 1].strip())
+        rest = rest[cut + 1:].strip()
+    return [part for part in parts if part]
+
+
 def onebot_text_from_segments(segments: list[dict[str, Any]], self_id: str) -> tuple[str, bool]:
     """把 OneBot 消息段数组拼成文本，同时判断是否 @ 了机器人。"""
     parts: list[str] = []

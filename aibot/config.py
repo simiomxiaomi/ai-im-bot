@@ -45,10 +45,11 @@ class LLMConfig:
     api_key: str = ""
     model: str = "deepseek-chat"
     temperature: float = 0.8
-    max_tokens: int = 600
+    max_tokens: int = 1024
     timeout_seconds: float = 60.0
     history_turns: int = 8
     max_reply_chars: int = 500
+    thinking: str = "auto"          # auto / off / low / high / max
     system_prompt: str = "你是一个简洁、友好的中文聊天助手。"
     extra_headers: dict[str, str] = field(default_factory=dict)
 
@@ -75,6 +76,8 @@ class ReplyConfig:
     group_at_sender: bool = True
     fallback: str = ""
     dry_run: bool = False
+    send_reasoning: bool = False   # 把模型思考过程也发出去
+    segment_chars: int = 0         # >0 时按字数分段发送
 
 
 @dataclass
@@ -184,6 +187,10 @@ class Config:
             errors.append("llm.temperature 必须在 0~2 之间")
         if self.llm.history_turns < 0:
             errors.append("llm.history_turns 不能为负数")
+        if self.llm.thinking not in {"auto", "off", "low", "high", "max"}:
+            errors.append("llm.thinking 只能是 auto/off/low/high/max")
+        if self.reply.segment_chars < 0:
+            errors.append("reply.segment_chars 不能为负数")
         for item in self.greeting.items:
             if not re.fullmatch(r"\s*\d{1,2}:\d{2}\s*", item.time):
                 errors.append(f"greeting 里 {item.name} 的时间 {item.time!r} 不是 HH:MM")

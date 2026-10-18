@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from .adapters.base import Adapter
 from .config import Config
 from .llm import LLMClient, LLMError
-from .models import IncomingMessage, clean_reply
+from .models import IncomingMessage, clean_reply, split_text
 from .policy import PolicyEngine
 from .store import Store
 
@@ -81,6 +81,7 @@ class Pipeline:
             log.info("回复 %s [%s] %s", label, msg.sender_name, _short(msg.text))
             started = time.monotonic()
             reply: str | None = None
+            reasoning = ""
 
             # 先让群助手处理固定命令（帮助/天气/每日一句），命中就不调用模型
             if self.command_handler is not None:
@@ -92,7 +93,9 @@ class Pipeline:
             if reply is None:
                 try:
                     async with self._sem:
-                        reply = await self.llm.chat(self._build_messages(msg))
+                        reply, reasoning = await self.llm.chat_with_reasoning(
+                            self._build_messages(msg)
+                        )
                 except LLMError as exc:
                     log.error("模型调用失败：%s", exc)
                     fallback = self.cfg.reply.fallback.strip()
@@ -123,9 +126,25 @@ class Pipeline:
                 log.warning("[dry_run] 未发送：%s", _short(out_text, 80))
                 return HandleResult(True, "dry_run", out_text, sent=False, dry_run=True)
 
-            sent = await self.adapter.send_text(
-                msg.session_type, msg.session_id, out_text, at_user=at_user, reply_to=msg.message_id
-            )
+            sent = False
+
+            # 推理过程（可选，单独发一条）
+            if self.cfg.reply.send_reasoning and reasoning:
+                reason_text = "【思考】\n" + reasoning[: max(100, self.cfg.llm.max_reply_chars)]
+                await self.adapter.send_text(
+                    msg.session_type, msg.session_id, reason_text, at_user=at_user
+                )
+
+            # 长回复按字数分段发送
+            segments = split_text(out_text, self.cfg.reply.segment_chars) or [out_text]
+            for index, segment in enumerate(segments):
+                ok = await self.adapter.send_text(
+                    msg.session_type, msg.session_id, segment,
+                    at_user=at_user if index == 0 else None,
+                    reply_to=msg.message_id if index == 0 else None,
+                )
+                sent = sent or ok
+
             if sent:
                 self.policy.note_reply(msg.session_key)
                 self.store.add_turn(

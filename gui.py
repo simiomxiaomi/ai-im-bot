@@ -46,12 +46,12 @@ import napcat_webui  # noqa: E402
 CONFIG_PATH = APP_DIR / "config.yaml"
 ENV_PATH = APP_DIR / ".env"
 
-BG = "#0b0f12"
-PANEL = "#111a1f"
-FG = "#cfe6df"
-MUTED = "#6f8b85"
-ACCENT = "#35e0b0"
-LINE = "#1d2d31"
+BG = "#0a0a0f"
+PANEL = "#12121b"
+FG = "#ececf5"
+MUTED = "#8b8ba3"
+ACCENT = "#e05c9a"
+LINE = "#23232f"
 
 # 常用 OpenAI 兼容服务预设：名称 -> (Base URL, 模型)
 PRESETS = {
@@ -98,12 +98,16 @@ class BotGUI(tk.Tk):
         self.geometry(self._window_size(980, 700))
         self.minsize(int(900 * self._scale), int(640 * self._scale))
         self.configure(bg=BG)
+        self._enable_acrylic()
         self._set_icon()
 
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.bot_app: Application | None = None
         self.bot_thread: threading.Thread | None = None
         self.napcat_proc = None
+        self._closing = False
+        self._ui_scale = 1.0
+        self._resize_job = None
 
         self._build_style()
         self._build_ui()
@@ -111,6 +115,7 @@ class BotGUI(tk.Tk):
         self._load_settings()
         self.after(200, self._drain_logs)
         self.after(2000, self._refresh_status)
+        threading.Thread(target=self._tail_napcat_log, daemon=True).start()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------ 界面
@@ -131,11 +136,52 @@ class BotGUI(tk.Tk):
         h = min(int(height * self._scale), int(screen_h * 0.9))
         return f"{w}x{h}"
 
+    def _on_resize(self, event) -> None:
+        if event.widget is not self:
+            return
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(180, self._apply_button_scale)
+
+    def _apply_button_scale(self) -> None:
+        """按钮字体和内边距跟随窗口宽度（0.9x ~ 1.5x）。"""
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        scale = max(0.9, min(1.5, width / 980))
+        if abs(scale - self._ui_scale) < 0.04:
+            return
+        self._ui_scale = scale
+        size = max(9, min(13, int(round(10 * scale))))
+        pad = max(4, int(round(6 * scale)))
+        style = ttk.Style(self)
+        for name in ("TButton", "Accent.TButton", "Danger.TButton"):
+            style.configure(name, font=("Microsoft YaHei UI", size), padding=pad)
+
     def _set_icon(self) -> None:
         try:
             base = Path(getattr(sys, "_MEIPASS", APP_DIR))
             self.iconphoto(True, tk.PhotoImage(file=str(base / "icon.png")))
         except Exception:  # noqa: BLE001 - 图标失败不影响使用
+            pass
+
+    def _enable_acrylic(self) -> None:
+        """只保留 Windows 11 圆角，不加透明/亚克力。
+
+        tkinter 的控件背景不透明，开亚克力+alpha 会让底层窗口透出来，
+        出现重影、输入框发白的问题，所以这里只做圆角。
+        """
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            corner = ctypes.c_int(2)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 33, ctypes.byref(corner), ctypes.sizeof(corner)
+            )
+        except Exception:  # noqa: BLE001
             pass
 
     def _build_style(self) -> None:
@@ -151,15 +197,31 @@ class BotGUI(tk.Tk):
                         font=("Microsoft YaHei UI", 11, "bold"))
         style.configure("Title.TLabel", background=BG, foreground=ACCENT,
                         font=("Microsoft YaHei UI", 16, "bold"))
-        style.configure("TButton", background="#132024", foreground=FG, borderwidth=0, padding=6)
-        style.map("TButton", background=[("active", "#1b3036")])
-        style.configure("Accent.TButton", background="#17453a", foreground=ACCENT)
-        style.map("Accent.TButton", background=[("active", "#1f5a4a")])
-        style.configure("Danger.TButton", background="#45201f", foreground="#ff8a80")
-        style.map("Danger.TButton", background=[("active", "#5a2a28")])
-        style.configure("TEntry", fieldbackground="#0a1114", foreground=FG,
+        style.configure("TButton", background="#1a1a24", foreground=FG, borderwidth=0,
+                        padding=5, font=("Microsoft YaHei UI", 9))
+        style.map("TButton", background=[("active", "#242432")])
+        style.configure("Accent.TButton", background="#451c33", foreground="#ffd9ea",
+                        font=("Microsoft YaHei UI", 9))
+        style.map("Accent.TButton", background=[("active", "#5a2542")])
+        style.configure("Danger.TButton", background="#451c25", foreground="#ff8a9a",
+                        font=("Microsoft YaHei UI", 9))
+        style.map("Danger.TButton", background=[("active", "#5a2530")])
+        style.configure("TEntry", fieldbackground="#0e0e16", foreground=FG,
                         insertcolor=FG, borderwidth=1)
-        style.configure("TCombobox", fieldbackground="#0a1114", foreground=FG)
+        style.configure("TCombobox", fieldbackground="#0e0e16", foreground=FG,
+                        background="#1a1a24", arrowcolor=FG, borderwidth=1)
+        style.map("TEntry",
+                  fieldbackground=[("focus", "#151520")],
+                  foreground=[("focus", FG)])
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", "#0e0e16"), ("focus", "#151520")],
+                  foreground=[("readonly", FG)],
+                  selectbackground=[("readonly", "#451c33")],
+                  selectforeground=[("readonly", "#ffd9ea")])
+        self.option_add("*TCombobox*Listbox.background", "#12121b")
+        self.option_add("*TCombobox*Listbox.foreground", FG)
+        self.option_add("*TCombobox*Listbox.selectBackground", "#451c33")
+        self.option_add("*TCombobox*Listbox.selectForeground", "#ffd9ea")
 
     def _build_ui(self) -> None:
         header = ttk.Frame(self)
@@ -203,7 +265,7 @@ class BotGUI(tk.Tk):
         left = ttk.Frame(canvas, style="Panel.TFrame", padding=14)
         window = canvas.create_window((0, 0), window=left, anchor="nw")
         left.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=max(1, event.width)))
 
         def _on_wheel(event) -> None:
             canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -250,7 +312,22 @@ class BotGUI(tk.Tk):
         label("API Key")
         _, self.var_api_key = entry("", show="*")
         label("模型名")
-        _, self.var_model = entry("deepseek-chat")
+        model_row = ttk.Frame(left, style="Panel.TFrame")
+        model_row.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=(8, 2))
+        model_row.columnconfigure(0, weight=1)
+        self.var_model = tk.StringVar(value="glm-5.3")
+        self.model_box = ttk.Combobox(model_row, textvariable=self.var_model)
+        self.model_box.grid(row=0, column=0, sticky="ew")
+        ttk.Button(model_row, text="获取", width=4,
+                   command=self._fetch_models).grid(row=0, column=1, padx=(6, 0))
+        row += 1
+
+        label("推理强度")
+        self.var_thinking = tk.StringVar(value="auto")
+        self.thinking_box = ttk.Combobox(left, textvariable=self.var_thinking, state="readonly",
+                                         values=["auto", "off", "low", "high", "max"])
+        self.thinking_box.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=(8, 2))
+        row += 1
 
         tk.Label(left, text="机器人", bg=PANEL, fg=ACCENT,
                   font=("Microsoft YaHei UI", 11, "bold")).grid(row=row, column=0, columnspan=2,
@@ -263,37 +340,59 @@ class BotGUI(tk.Tk):
         label("OneBot Token")
         _, self.var_token = entry("aibot-token")
 
+        self.var_send_reasoning = tk.BooleanVar(value=False)
+        tk.Checkbutton(left, text="把推理过程也发出去", variable=self.var_send_reasoning,
+                       bg=PANEL, fg=FG, selectcolor=PANEL, activebackground=PANEL,
+                       activeforeground=FG, highlightthickness=0,
+                       font=("Microsoft YaHei UI", 9)).grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        row += 1
+        label("分段字数（0=不分段）")
+        _, self.var_segment = entry("0")
+
         tk.Label(left, text="NapCat（QQ 协议端）", bg=PANEL, fg=ACCENT,
                   font=("Microsoft YaHei UI", 11, "bold")).grid(row=row, column=0, columnspan=2,
                                                                 sticky="w", pady=(14, 0))
         row += 1
-        self.napcat_state = tk.Label(left, text="检测中…", bg=PANEL, fg=MUTED)
+        self.napcat_state = tk.Label(left, text="检测中…", bg=PANEL, fg=MUTED,
+                                     anchor="w", justify="left", wraplength=310)
         self.napcat_state.grid(row=row, column=0, columnspan=2, sticky="w", pady=(4, 4))
         row += 1
 
-        napcat_btns = ttk.Frame(left, style="Panel.TFrame")
-        napcat_btns.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(2, 0))
-        row += 1
-        ttk.Button(napcat_btns, text="快速安装", style="Accent.TButton",
-                   command=self._quick_install).pack(side="left")
-        ttk.Button(napcat_btns, text="启动 NapCat", command=self._launch_napcat).pack(side="left", padx=6)
-        ttk.Button(napcat_btns, text="扫码登录", command=self._scan_qr).pack(side="left")
+        def button_row(buttons) -> ttk.Frame:
+            """一行按钮按列均分，保证全部可见、不挤出去。"""
+            frame = ttk.Frame(left, style="Panel.TFrame")
+            for index, (text, command, style_name) in enumerate(buttons):
+                frame.columnconfigure(index, weight=1, uniform="btn")
+                ttk.Button(frame, text=text, command=command,
+                           style=style_name).grid(row=0, column=index, sticky="ew", padx=2)
+            return frame
 
-        napcat_btns2 = ttk.Frame(left, style="Panel.TFrame")
-        napcat_btns2.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        quick_row = button_row([
+            ("快速安装", self._quick_install, "Accent.TButton"),
+            ("启动 NapCat", self._launch_napcat, "TButton"),
+            ("扫码登录", self._scan_qr, "TButton"),
+        ])
+        quick_row.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(2, 0))
         row += 1
-        ttk.Button(napcat_btns2, text="一键下载", command=self._download_napcat).pack(side="left")
-        ttk.Button(napcat_btns2, text="修复下载", command=self._repair_download).pack(side="left", padx=6)
-        ttk.Button(napcat_btns2, text="测速下载", command=self._speedtest_download).pack(side="left")
-        ttk.Button(napcat_btns2, text="安装", command=self._install_napcat).pack(side="left", padx=6)
 
-        napcat_btns3 = ttk.Frame(left, style="Panel.TFrame")
-        napcat_btns3.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        download_row = button_row([
+            ("一键下载", self._download_napcat, "TButton"),
+            ("修复下载", self._repair_download, "TButton"),
+            ("测速下载", self._speedtest_download, "TButton"),
+            ("安装", self._install_napcat, "TButton"),
+        ])
+        download_row.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         row += 1
-        ttk.Button(napcat_btns3, text="自动配置", command=self._auto_config).pack(side="left")
-        ttk.Button(napcat_btns3, text="重启 NapCat", command=self._restart_napcat).pack(side="left", padx=6)
-        ttk.Button(napcat_btns3, text="卸载", command=self._uninstall_napcat).pack(side="left")
-        ttk.Button(napcat_btns3, text="WebUI", command=self._open_napcat_webui).pack(side="left", padx=6)
+
+        manage_row = button_row([
+            ("自动配置", self._auto_config, "TButton"),
+            ("重启 NapCat", self._restart_napcat, "TButton"),
+            ("卸载", self._uninstall_napcat, "TButton"),
+            ("WebUI", self._open_napcat_webui, "TButton"),
+        ])
+        manage_row.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        row += 1
 
         tk.Label(left, text="首次使用：测速下载 → 安装 NapCat → 启动 → 扫码 → 自动配置\n"
                              "下载进度会显示在右侧「运行日志」里。",
@@ -311,17 +410,54 @@ class BotGUI(tk.Tk):
         tk.Label(head, text="运行日志", bg=PANEL, fg=FG).pack(side="left")
         ttk.Button(head, text="清空", command=lambda: self.log_text.delete("1.0", "end")).pack(side="right")
 
-        self.log_text = tk.Text(right, bg="#0a1114", fg="#9fb3ad", insertbackground=FG,
+        self.log_text = tk.Text(right, bg="#0e0e16", fg="#a8a8bd", insertbackground=FG,
                                 relief="flat", wrap="word", font=("Consolas", 10))
         self.log_text.grid(row=1, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(right, orient="vertical", command=self.log_text.yview)
         scroll.grid(row=1, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scroll.set)
-        self.log_text.tag_configure("INFO", foreground="#9fb3ad")
+        self.log_text.tag_configure("INFO", foreground="#a8a8bd")
         self.log_text.tag_configure("WARNING", foreground="#ffc857")
-        self.log_text.tag_configure("ERROR", foreground="#ff6b6b")
+        self.log_text.tag_configure("ERROR", foreground="#ff6b8a")
 
     # ------------------------------------------------------------------ 配置
+
+    def _fetch_models(self) -> None:
+        """调用 /models 自动获取可用模型列表。"""
+        base = self.var_base_url.get().strip()
+        key = self.var_api_key.get().strip()
+        if not base or not key:
+            messagebox.showwarning("缺少信息", "先填 Base URL 和 API Key")
+            return
+
+        def worker() -> None:
+            try:
+                async def fetch() -> list[str]:
+                    from aibot.config import LLMConfig
+                    from aibot.llm import LLMClient
+
+                    cfg = LLMConfig(base_url=base, api_key=key,
+                                    model=self.var_model.get() or "placeholder")
+                    client = LLMClient(cfg)
+                    try:
+                        return await client.list_models()
+                    finally:
+                        await client.close()
+
+                models = asyncio.run(fetch())
+                self.after(0, lambda: self._apply_models(models))
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: messagebox.showerror("获取模型失败", str(exc)))
+
+        self._log("正在获取模型列表…")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_models(self, models: list[str]) -> None:
+        self.model_box["values"] = models
+        if models and self.var_model.get() not in models:
+            self.var_model.set(models[0])
+        preview = "、".join(models[:12]) + ("…" if len(models) > 12 else "")
+        self._log("可用模型：{}".format(preview))
 
     def _apply_preset(self, event=None) -> None:
         name = self.preset_box.get()
@@ -358,6 +494,10 @@ class BotGUI(tk.Tk):
         self.var_persona.set(str(data.get("persona") or "default"))
         if self.var_persona.get() not in persona_names():
             self.var_persona.set("default")
+        self.var_thinking.set(str(llm.get("thinking") or "auto"))
+        reply = data.get("reply") or {}
+        self.var_send_reasoning.set(bool(reply.get("send_reasoning")))
+        self.var_segment.set(str(reply.get("segment_chars") or 0))
         for name, (base, _model) in PRESETS.items():
             if self.var_base_url.get() == base:
                 self.preset_box.set(name)
@@ -380,6 +520,7 @@ class BotGUI(tk.Tk):
                 "base_url": self.var_base_url.get().strip(),
                 "api_key": "${LLM_API_KEY}",
                 "model": self.var_model.get().strip(),
+                "thinking": self.var_thinking.get(),
                 "history_turns": 8,
                 "max_reply_chars": 500,
                 "system_prompt": (
@@ -387,6 +528,10 @@ class BotGUI(tk.Tk):
                     "要求：口语化中文，1~3 句，不要暴露 AI；"
                     "涉及转账、验证码、密码、陌生链接一律说稍后确认。"
                 ),
+            },
+            "reply": {
+                "send_reasoning": bool(self.var_send_reasoning.get()),
+                "segment_chars": self._segment_chars(),
             },
             "policy": {
                 "private": "whitelist",
@@ -407,6 +552,12 @@ class BotGUI(tk.Tk):
             "persona": self.var_persona.get().strip() or "default",
             "log_level": "INFO",
         }
+
+    def _segment_chars(self) -> int:
+        try:
+            return max(0, int(self.var_segment.get().strip() or 0))
+        except ValueError:
+            return 0
 
     def _save_settings(self) -> bool:
         api_key = self.var_api_key.get().strip()
@@ -863,9 +1014,41 @@ class BotGUI(tk.Tk):
             self._log(line)
         self.after(200, self._drain_logs)
 
+    def _tail_napcat_log(self) -> None:
+        """后台读取 NapCat 文件日志，实时显示在 GUI 里。"""
+        path: Path | None = None
+        offset = 0
+        while not self._closing:
+            try:
+                files = installer.napcat_log_files()
+                if files:
+                    latest = files[0]
+                    if latest != path:
+                        path = latest
+                        offset = 0
+                    size = path.stat().st_size
+                    if size < offset:
+                        offset = 0
+                    if size > offset:
+                        with path.open("r", encoding="utf-8", errors="replace") as fh:
+                            fh.seek(offset)
+                            text = fh.read()
+                            offset = fh.tell()
+                        for line in text.splitlines():
+                            if line.strip():
+                                self.after(0, lambda l=line: self._log("[NapCat] " + l))
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(1.5)
+
     def _on_close(self) -> None:
+        self._closing = True
         if self.bot_app:
             self.bot_app.request_stop()
+        try:
+            installer.stop_napcat()
+        except Exception:  # noqa: BLE001
+            pass
         self.destroy()
 
 

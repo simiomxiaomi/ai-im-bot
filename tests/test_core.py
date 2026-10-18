@@ -49,6 +49,9 @@ class FakeLLM:
             raise self.error
         return self.reply
 
+    async def chat_with_reasoning(self, messages, **kwargs):
+        return await self.chat(messages, **kwargs), ""
+
 
 TMP_ROOT = Path(__file__).resolve().parent.parent / ".testtmp"
 TMP_ROOT.mkdir(exist_ok=True)

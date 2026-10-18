@@ -303,6 +303,41 @@ def _find_qq_exe() -> Path | None:
     return None
 
 
+def enable_file_log() -> Path | None:
+    """打开 NapCat 的文件日志，方便 GUI 读取（不再依赖 cmd 窗口）。"""
+    deep = _find_deep_napcat()
+    if deep is None:
+        return None
+    path = deep / "config" / "napcat.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("fileLog"):
+        return path
+    data["fileLog"] = True
+    try:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
+def napcat_log_files() -> list[Path]:
+    """NapCat 的日志文件（按修改时间倒序）。"""
+    deep = _find_deep_napcat()
+    if deep is None:
+        return []
+    logs_dir = deep / "logs"
+    if not logs_dir.exists():
+        return []
+    files = [path for path in logs_dir.rglob("*.log") if path.is_file()]
+    files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return files
+
+
 def find_qrcode_png() -> Path | None:
     """NapCat 登录二维码会保存到 cache/qrcode.png，GUI 可以直接显示。"""
     for pattern in (
@@ -321,7 +356,7 @@ def _launch_elevated(exe: Path, params: str, cwd: Path) -> bool:
         import ctypes
 
         result = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", str(exe), params, str(cwd), 1
+            None, "runas", str(exe), params, str(cwd), 0
         )
         return result > 32
     except Exception:  # noqa: BLE001
@@ -339,6 +374,7 @@ def launch_napcat(launcher: Path | None = None) -> subprocess.Popen | None:
     deep = _find_deep_napcat()
     qq_exe = _find_qq_exe()
     if deep and qq_exe:
+        enable_file_log()  # 日志落盘，GUI 里实时显示，不再依赖 cmd 窗口
         exe = deep / "NapCatWinBootMain.exe"
         hook = deep / "NapCatWinBootHook.dll"
         if os.name == "nt":
@@ -349,9 +385,11 @@ def launch_napcat(launcher: Path | None = None) -> subprocess.Popen | None:
                 return None
             return subprocess.Popen(
                 ["cmd", "/c", command], cwd=str(deep),
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-        return subprocess.Popen([str(exe), str(qq_exe), str(hook)], cwd=str(deep))
+        return subprocess.Popen([str(exe), str(qq_exe), str(hook)], cwd=str(deep),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     launcher = launcher or find_launcher()
     if launcher is None:
@@ -386,6 +424,26 @@ def restart_napcat(close_qq: bool = True, wait: float = 2.0) -> subprocess.Popen
         )
     time.sleep(max(0.0, wait))
     return launch_napcat()
+
+
+def stop_napcat(close_qq: bool = True) -> None:
+    """关闭 NapCat 启动器；只结束 NapCat 目录下的 QQ，不动日常 QQ。"""
+    for name in ("NapCatWinBootMain.exe", "NapCatWinBootMain"):
+        subprocess.run(
+            ["taskkill", "/F", "/IM", name],
+            capture_output=True, text=True, check=False,
+        )
+    if not close_qq:
+        return
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name='QQ.exe'\" | "
+        "Where-Object { $_.ExecutablePath -like '*napcat*' } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True, text=True, check=False,
+    )
 
 
 def uninstall_napcat() -> None:
